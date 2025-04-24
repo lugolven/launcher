@@ -329,3 +329,124 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     Ok(())
 }
+
+
+#[cfg(test)]
+mod tests {
+    use std::net::TcpListener;
+
+    use super::*;
+    use iron::{status, Iron, IronResult, Request, Response};
+    use tokio::fs;
+
+    fn get_available_port() -> Option<u16> {
+        (8000..9000)
+            .find(|port| port_is_available(*port))
+    }
+    
+    fn port_is_available(port: u16) -> bool {
+        match TcpListener::bind(("127.0.0.1", port)) {
+            Ok(_) => true,
+            Err(_) => false,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_read_json_file() {
+        let test_file_path = "test_config.json";
+        let test_content = r#"#! /bin/launcher
+        {
+            "name": "test_binary",
+            "version": "1.0.0",
+            "urlPattern": "https://example.com/{{version}}/{{os}}/{{arch}}.zip",
+            "platforms": {
+                "linux": {
+                    "arm64": {
+                        "sha256": "dummysha256"
+                    }
+                }
+            },
+            "compression": {
+                "type": "zip"
+            }
+        }"#;
+
+        fs::write(test_file_path, test_content).await.unwrap();
+        let config = read_json_file(test_file_path).await.unwrap();
+        assert_eq!(config.name, "test_binary");
+        assert_eq!(config.version, "1.0.0");
+        assert_eq!(config.url_pattern, "https://example.com/{{version}}/{{os}}/{{arch}}.zip");
+        fs::remove_file(test_file_path).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_download_file() {
+        // start a local server to test the download using iron
+        fn hello_world(_: &mut Request) -> IronResult<Response> {
+            Ok(Response::with((status::Ok, "Hello World!")))
+        }
+        let port = get_available_port().unwrap();
+        let mut server = Iron::new(hello_world).http(format!("localhost:{}", port)).unwrap();
+        let url = format!("http://localhost:{}", port);
+        let result = download_file(&url).await;
+        assert!(result.is_ok());
+        server.close().unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_download_and_validate_sha256() {
+        fn hello_world(_: &mut Request) -> IronResult<Response> {
+            Ok(Response::with((status::Ok, "Hello World!")))
+        }
+        let port = get_available_port().unwrap();
+        let mut server = Iron::new(hello_world).http(format!("localhost:{}", port)).unwrap();
+        let url = format!("http://localhost:{}", port);
+
+        let sha256 = "d41d8cd98f00b204e9800998ecf8427e"; // Dummy SHA256 for testing
+        let result = download_and_validate_sha256(&url, sha256).await;
+        assert!(result.is_err()); // Should fail due to SHA256 mismatch
+        server.close().unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_build_url_and_sha256() {
+        let config = Configuration {
+            name: "test_binary".to_string(),
+            version: "1.0.0".to_string(),
+            url_pattern: "https://example.com/{{version}}/{{os}}/{{arch}}.zip".to_string(),
+            platforms: {
+                let mut platforms = BTreeMap::new();
+                let mut arch_map = BTreeMap::new();
+                arch_map.insert("arm64".to_string(), ConfigurationPlatformOSArchitecture {
+                    sha256: "dummysha256".to_string(),
+                });
+                platforms.insert("linux".to_string(), arch_map);
+                platforms
+            },
+            strip_prefix: None,
+            compression: ConfigurationCompression {
+                compression_type: ConfigurationCompressionType::Zip,
+                strip_prefix: None,
+            },
+        };
+
+        let result = build_url_and_sha256(&config).await;
+        if result.is_err() {
+            panic!("Error: {:?}", result.err());
+        }
+        let (url, sha256) = result.unwrap();
+        assert_eq!(url, "https://example.com/1.0.0/linux/arm64.zip");
+        assert_eq!(sha256, "dummysha256");
+    }
+
+    #[tokio::test]
+    async fn test_marker_file_json_content() {
+        let sha256 = "dummysha256";
+        let url = "https://example.com/test.zip";
+        let result = marker_file_json_content(sha256, url);
+        assert!(result.is_ok());
+        let json = result.unwrap();
+        let expected_json = r#"{"sha256":"dummysha256","url":"https://example.com/test.zip"}"#;
+        assert_eq!(String::from_utf8(json).unwrap(), expected_json);
+    }
+}
