@@ -6,13 +6,13 @@ edition = "2024"
 [dependencies]
 reqwest = "0.12.15"
 serde = { version = "1.0.219", features = ["derive"] }
-serde_json = "1.0.140"
 tokio = { version = "1.44.2", features = ["fs", "full", "macros", "rt-multi-thread"] }
 openssl = { version = "0.10.72", features = ["vendored"] }
 shellexpand = "3.1.1"
 sha2 = "0.10.8"
 bytes = "1.10.1"
 zip = "2.6.1"
+serde_yaml = "0.9.34"
 
 [dev-dependencies]
 iron = "0.6.1"

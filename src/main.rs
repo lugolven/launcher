@@ -1,7 +1,8 @@
 use bytes::Bytes;
+use models::download_marker::MarkerFile;
 use sha2::Digest;
 use std::{
-    collections::BTreeMap,
+    collections::HashMap,
     io::Read,
     os::unix::fs::PermissionsExt,
     path::{self, PathBuf},
@@ -10,52 +11,19 @@ use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     process::Command,
 };
+pub mod models;
 
-#[derive(Debug, serde::Deserialize, serde::Serialize)]
-struct Configuration {
-    name: String,
-    version: String,
-    #[serde(rename = "urlPattern")]
-    url_pattern: String,
-    platforms: ConfigurationPlatforms,
-    #[serde(skip_serializing_if = "Option::is_none", rename = "stripPrefix")]
-    strip_prefix: Option<String>,
-    compression: ConfigurationCompression,
-}
+use crate::models::configuration::{
+    File,
+    Compression,
+    CompressionType
+};
 
-#[derive(Debug, serde::Deserialize, serde::Serialize)]
-struct ConfigurationCompression {
-    #[serde(rename = "type")]
-    compression_type: ConfigurationCompressionType,
-    #[serde(rename = "stripPrefix")]
-    strip_prefix: Option<String>,
-}
 
-#[derive(Debug, serde::Deserialize, serde::Serialize)]
-#[serde(rename_all = "lowercase")]
-enum ConfigurationCompressionType {
-    Zip,
-}
-
-type ConfigurationPlatforms = BTreeMap<String, ConfigurationPlatformOS>;
-type ConfigurationPlatformOS = BTreeMap<String, ConfigurationPlatformOSArchitecture>;
-#[derive(Debug, serde::Deserialize, serde::Serialize, Clone)]
-struct ConfigurationPlatformOSArchitecture {
-    sha256: String,
-}
-
-#[derive(Debug, serde::Deserialize, serde::Serialize, Clone)]
-struct MarkerFile {
-    sha256: String,
-    url: String,
-}
-
-async fn read_json_file(path: &str) -> Result<Configuration, Box<dyn std::error::Error>> {
+async fn read_yaml_file(path: &str) -> Result<File, Box<dyn std::error::Error>> {
     let file = tokio::fs::read(path).await?;
     let content = String::from_utf8(file)?;
-    // remove the first line
-    let content = content.lines().skip(1).collect::<Vec<_>>().join("\n");
-    let base_file: Configuration = serde_json::from_str(&content)?;
+    let base_file: File = serde_yaml::from_str(&content)?;
     Ok(base_file)
 }
 
@@ -81,24 +49,25 @@ async fn download_and_validate_sha256(
     }
     Ok(bytes)
 }
-
-static ARCH_MAPPING: [(&str, &str); 2] = [("x86_64", "amd64"), ("aarch64", "arm64")];
+static ARCH_MAPPING: std::sync::LazyLock<HashMap<&str, &str>> = std::sync::LazyLock::new(|| {
+    let mut map = HashMap::new();
+    map.insert("x86_64", "amd64");
+    map.insert("aarch64", "arm64");
+    map
+});
 
 async fn build_url_and_sha256(
-    configuration: &Configuration,
+    configuration: &File,
+    os : &str,
+    arch: &str,
 ) -> Result<(String, String), Box<dyn std::error::Error>> {
-    let os = std::env::consts::OS;
-    let arch = std::env::consts::ARCH;
-    let arch = ARCH_MAPPING
-        .iter()
-        .find(|(k, _)| *k == arch)
-        .map(|(_, v)| *v)
-        .unwrap_or(arch);
+    
+    let arch = ARCH_MAPPING.get(arch).ok_or("Architecture not found")?;
     let platform = configuration
         .platforms
         .get(os)
         .ok_or("Platform not found")?;
-    let architecture = platform.get(arch).ok_or("Architecture not found")?;
+    let architecture = platform.get(*arch).ok_or("Architecture not found")?;
     let url = configuration
         .url_pattern
         .replace("{{version}}", &configuration.version)
@@ -108,7 +77,7 @@ async fn build_url_and_sha256(
 }
 
 async fn extract_to_disk(
-    compression: &ConfigurationCompression,
+    compression: &Compression,
     content: &Bytes,
     folder: &PathBuf,
     executable_path: &PathBuf,
@@ -123,7 +92,7 @@ async fn extract_to_disk(
             })?;
     }
     match compression.compression_type {
-        ConfigurationCompressionType::Zip => {
+        CompressionType::Zip => {
             let mut archive = zip::ZipArchive::new(std::io::Cursor::new(content.to_vec()))
                 .or_else(|e| {
                     Err::<_, Box<dyn std::error::Error>>(
@@ -199,8 +168,9 @@ fn marker_file_json_content(
         sha256: sha256.to_string(),
         url: url.to_string(),
     };  
-    let json = serde_json::to_vec(&marker_file)?;
-    Ok(json)
+    let yaml = serde_yaml::to_string(&marker_file)?;
+
+    Ok(yaml.as_bytes().to_vec())
 }
 
 #[tokio::main]
@@ -213,7 +183,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::process::exit(1);
     });
 
-    let configuration = read_json_file(&file).await?;
+    let configuration = read_yaml_file(&file).await?;
     let binding = shellexpand::tilde(CACHE_LOCATION);
     let cache_path = path::Path::new(binding.as_ref());
     let command_cache_base = cache_path.join(&configuration.name);
@@ -236,8 +206,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 )
             })?;
     }
-
-    let (url, sha256) = build_url_and_sha256(&configuration).await?;
+    let (url, sha256) = build_url_and_sha256(&configuration, std::env::consts::OS, std::env::consts::ARCH).await?;
     
     let marker_file_expected_content = marker_file_json_content(&sha256, &url)?;
     let need_redownload = if tokio::fs::metadata(&executable_path).await.is_err() {
@@ -333,7 +302,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 #[cfg(test)]
 mod tests {
-    use std::net::TcpListener;
+    use std::{collections::BTreeMap, net::TcpListener};
+
+    use crate::models::configuration::PlatformOSArchitecture;
 
     use super::*;
     use iron::{status, Iron, IronResult, Request, Response};
@@ -352,27 +323,27 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_read_json_file() {
+    async fn test_read_yaml_file() {
+        // Arrange
         let test_file_path = "test_config.json";
         let test_content = r#"#! /bin/launcher
-        {
-            "name": "test_binary",
-            "version": "1.0.0",
-            "urlPattern": "https://example.com/{{version}}/{{os}}/{{arch}}.zip",
-            "platforms": {
-                "linux": {
-                    "arm64": {
-                        "sha256": "dummysha256"
-                    }
-                }
-            },
-            "compression": {
-                "type": "zip"
-            }
-        }"#;
+        name: test_binary
+        version: 1.0.0
+        urlPattern: https://example.com/{{version}}/{{os}}/{{arch}}.zip
+        platforms:
+            linux:
+                arm64:
+                    sha256: dummysha256
+        compression:
+            type: zip
+"#;
 
         fs::write(test_file_path, test_content).await.unwrap();
-        let config = read_json_file(test_file_path).await.unwrap();
+
+        // Act
+        let config = read_yaml_file(test_file_path).await.unwrap();
+
+        // Assert
         assert_eq!(config.name, "test_binary");
         assert_eq!(config.version, "1.0.0");
         assert_eq!(config.url_pattern, "https://example.com/{{version}}/{{os}}/{{arch}}.zip");
@@ -381,20 +352,25 @@ mod tests {
 
     #[tokio::test]
     async fn test_download_file() {
-        // start a local server to test the download using iron
+        // Arrange
         fn hello_world(_: &mut Request) -> IronResult<Response> {
             Ok(Response::with((status::Ok, "Hello World!")))
         }
         let port = get_available_port().unwrap();
         let mut server = Iron::new(hello_world).http(format!("localhost:{}", port)).unwrap();
         let url = format!("http://localhost:{}", port);
+        
+        // Act
         let result = download_file(&url).await;
+
+        // Assert
         assert!(result.is_ok());
         server.close().unwrap();
     }
 
     #[tokio::test]
     async fn test_download_and_validate_sha256() {
+        // Arrange
         fn hello_world(_: &mut Request) -> IronResult<Response> {
             Ok(Response::with((status::Ok, "Hello World!")))
         }
@@ -403,34 +379,41 @@ mod tests {
         let url = format!("http://localhost:{}", port);
 
         let sha256 = "d41d8cd98f00b204e9800998ecf8427e"; // Dummy SHA256 for testing
+    
+        // Act
         let result = download_and_validate_sha256(&url, sha256).await;
+        
+        // Assert
         assert!(result.is_err()); // Should fail due to SHA256 mismatch
         server.close().unwrap();
     }
 
     #[tokio::test]
     async fn test_build_url_and_sha256() {
-        let config = Configuration {
+        // Arrange
+        let config = File {
             name: "test_binary".to_string(),
             version: "1.0.0".to_string(),
             url_pattern: "https://example.com/{{version}}/{{os}}/{{arch}}.zip".to_string(),
             platforms: {
                 let mut platforms = BTreeMap::new();
                 let mut arch_map = BTreeMap::new();
-                arch_map.insert("arm64".to_string(), ConfigurationPlatformOSArchitecture {
+                arch_map.insert("arm64".to_string(), PlatformOSArchitecture {
                     sha256: "dummysha256".to_string(),
                 });
                 platforms.insert("linux".to_string(), arch_map);
                 platforms
             },
             strip_prefix: None,
-            compression: ConfigurationCompression {
-                compression_type: ConfigurationCompressionType::Zip,
-                strip_prefix: None,
+            compression: Compression {
+                compression_type: CompressionType::Zip
             },
         };
 
-        let result = build_url_and_sha256(&config).await;
+        // Act
+        let result = build_url_and_sha256(&config, "linux", "aarch64").await;
+        
+        // Assert
         if result.is_err() {
             panic!("Error: {:?}", result.err());
         }
@@ -441,12 +424,20 @@ mod tests {
 
     #[tokio::test]
     async fn test_marker_file_json_content() {
+        // Arrange
         let sha256 = "dummysha256";
         let url = "https://example.com/test.zip";
+        
+
+        // Act
         let result = marker_file_json_content(sha256, url);
+
+        // Assert
         assert!(result.is_ok());
         let json = result.unwrap();
-        let expected_json = r#"{"sha256":"dummysha256","url":"https://example.com/test.zip"}"#;
+        let expected_json = r#"sha256: dummysha256
+url: https://example.com/test.zip
+"#;
         assert_eq!(String::from_utf8(json).unwrap(), expected_json);
     }
 }
