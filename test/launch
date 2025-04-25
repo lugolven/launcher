@@ -1,0 +1,12 @@
+#! /workspaces/launcher/target/debug/launcher
+name: terraform
+version: 1.11.3
+urlPattern: https://releases.hashicorp.com/terraform/{{version}}/terraform_{{version}}_{{os}}_{{arch}}.zip
+platforms:
+    linux:
+        amd64:
+            sha256: 1ce994251c00281d6845f0f268637ba50c0005657eb3cf096b92f753b42ef4dc
+        arm64:
+            sha256: d685953bec501c0acda13319f34dddaadf33a8f553c85533531d3c7d5f84604a
+compression:
+    type: zip
