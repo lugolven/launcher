@@ -70,7 +70,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let download_path = command_cache_base.join("downloaded");
     let executable_path = download_path.join(&configuration.name);
-    let sha256_marker_file = command_cache_base.join("sha256");
+    let sha256_marker_path = command_cache_base.join("sha256");
 
     if tokio::fs::metadata(&download_path).await.is_err() {
         tokio::fs::create_dir_all(&download_path)
@@ -92,7 +92,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
 
     marker_manager.invoke_if_different(
-        sha256_marker_file,
+        sha256_marker_path,
         &MarkerFile {
             sha256: sha256.clone(),
             url: url.clone(),
@@ -117,9 +117,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         },
     ).await?;
 
-    // exec executable_path with args of the current process and forward stdin, stdout, and stderr
     let args = std::env::args().skip(2).collect::<Vec<_>>();
-    println!("Executing: {:?}", args);
     let mut command = Command::new(executable_path);
     command.args(args);
     command.stdin(std::process::Stdio::inherit());
