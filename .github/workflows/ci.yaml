@@ -10,38 +10,29 @@ on:
 
 jobs:
   build:
-
     runs-on: ubuntu-latest
-
+    permissions:
+      contents: write
+      actions: write
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set up Rust
-        uses: actions-rs/toolchain@v1
+      - uses: docker/setup-buildx-action@v2
+    
+      - uses: docker/build-push-action@v4
         with:
-          toolchain: stable
-          override: true
-          override-file: Cargo.toml
+          context: .
+          file: "Dockerfile"
+          tags: ci
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          push: false
+          target: ci
 
-      - name: Cache Cargo registry
-        uses: actions/cache@v4
+      - name: Run CI
+        uses: addnab/docker-run-action@v3
         with:
-          path: ~/.cargo/registry
-          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-registry-
-
-      - name: Cache Cargo index
-        uses: actions/cache@v4
-        with:
-          path: ~/.cargo/git
-          key: ${{ runner.os }}-cargo-git-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-git-
-
-      - name: Build
-        run: cargo build --release
-
-      - name: Run tests
-        run: cargo test --verbose
+          image: ci
+          run: GITHUB_TOKEN="${{ secrets.GITHUB_TOKEN }}" make ci
