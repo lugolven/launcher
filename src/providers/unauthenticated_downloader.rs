@@ -64,9 +64,15 @@ mod tests {
     use iron::{status, Iron, IronResult, Listening, Request, Response};
 
     use std::net::TcpListener;
+    use rand::rng;
+    use rand::seq::SliceRandom;
 
     fn get_available_port() -> Option<u16> {
-        (8000..9000).find(|port| port_is_available(*port))
+        let ports = 8000..9000;
+        let mut rng = rng();
+        let mut ports: Vec<u16> = ports.collect();
+        ports.shuffle(&mut rng);
+        ports.iter().find(|&&port| port_is_available(port)).copied()
     }
 
     fn port_is_available(port: u16) -> bool {
@@ -79,8 +85,11 @@ mod tests {
         let handler = move |_req: &mut Request| -> IronResult<Response> {
             Ok(Response::with((status::Ok, content)))
         };
-
-        (Iron::new(handler).http(("127.0.0.1", port)).unwrap(), port)
+        
+        match Iron::new(handler).http(("127.0.0.1", port)) {
+            Ok(listener) => (listener, port),
+            Err(e) => panic!("Failed to start server: {}", e),
+        } 
     }
 
     #[tokio::test]

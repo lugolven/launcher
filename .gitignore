@@ -19,3 +19,6 @@ target/
 # Added by cargo
 
 /target
+# Added by goreleaser init:
+dist/
+.intentionally-empty-file.o
