@@ -1,7 +1,7 @@
 FROM rust:1.86 AS rust
 
 FROM golang:1.24 AS gh
-RUN GOBIN=/bin-go go install github.com/cli/cli@v2.71.1
+RUN GOBIN=/bin-go go install github.com/cli/cli@v2.72.0
 
 FROM ubuntu:25.04 AS base
 RUN apt update && apt install curl zip make git gcc gpg build-essential libssl-dev g++-x86-64-linux-gnu libc6-dev-amd64-cross -y
