@@ -1,12 +1,16 @@
 FROM rust:1.86 AS rust
 
-FROM golang:1.24 AS gh
-RUN GOBIN=/bin-go go install github.com/cli/cli@v2.72.0
+# Todo: ideally the version of gh cli would pinned to a specific version
+FROM ubuntu:25.04 AS gh
+RUN apt update && apt install -y curl gpg
+RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | gpg --dearmor -o /usr/share/keyrings/githubcli-archive-keyring.gpg;
+RUN echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | tee /etc/apt/sources.list.d/github-cli.list > /dev/null;
+RUN apt update && apt install -y gh;
 
 FROM ubuntu:25.04 AS base
 RUN apt update && apt install curl zip make git gcc gpg build-essential libssl-dev g++-x86-64-linux-gnu libc6-dev-amd64-cross -y
 
-COPY --from=gh /bin-go/gh /usr/local/bin/gh
+COPY --from=gh /usr/bin/gh /usr/bin
 COPY --from=rust /usr/local/cargo/bin /usr/local/cargo/bin
 COPY --from=rust /usr/local/rustup /usr/local/rustup
 COPY --from=rust /usr/local/cargo /usr/local/cargo
