@@ -7,7 +7,7 @@ edition = "2024"
 reqwest = "0.12.15"
 serde = { version = "1.0.219", features = ["derive"] }
 tokio = { version = "1.45.0", features = ["fs", "full", "macros", "rt-multi-thread"] }
-openssl = { version = "0.10.72", features = ["vendored"] }
+openssl = { version = "0.10.73", features = ["vendored"] }
 shellexpand = "3.1.1"
 sha2 = "0.10.9"
 bytes = "1.10.1"
